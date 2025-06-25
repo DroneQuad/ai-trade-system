@@ -73,11 +73,11 @@ def main():
         with col2:
             rsi_window = st.slider("RSI Window", 5, 30, 14, key="rsi_window")
             delta = data['Close'].diff()
-            gain = delta.where(delta > 0, 0)
-            loss = -delta.where(delta < 0, 0)
-            avg_gain = gain.rolling(rsi_window).mean()
-            avg_loss = loss.rolling(rsi_window).mean()
-            rs = avg_gain / avg_loss
+            gain = (delta.where(delta > 0, 0)).fillna(0)
+            loss = (-delta.where(delta < 0, 0)).fillna(0)
+            avg_gain = gain.rolling(rsi_window, min_periods=1).mean()
+            avg_loss = loss.rolling(rsi_window, min_periods=1).mean()
+            rs = avg_gain / (avg_loss + 1e-10)  # Hindari pembagian nol
             data['RSI'] = 100 - (100 / (1 + rs))
             fig_rsi, ax_rsi = plt.subplots(figsize=(10, 4))
             ax_rsi.plot(data['RSI'])
