@@ -2,11 +2,20 @@ import yfinance as yf
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout
-from tensorflow.keras.optimizers import Adam
 import backtrader as bt
 import matplotlib.pyplot as plt
+
+# Coba impor TensorFlow, jika gagal gunakan Keras standalone
+try:
+    from tensorflow.keras.models import Sequential
+    from tensorflow.keras.layers import LSTM, Dense, Dropout
+    from tensorflow.keras.optimizers import Adam
+    print("Using TensorFlow Keras")
+except ImportError:
+    from keras.models import Sequential
+    from keras.layers import LSTM, Dense, Dropout
+    from keras.optimizers import Adam
+    print("Using Standalone Keras")
 
 # Fungsi untuk download data
 def load_data(ticker, start_date, end_date):
@@ -127,21 +136,28 @@ def run_backtest(data, signals, initial_cash=10000):
 # Plot equity curve
 def plot_equity_curve(cerebro):
     # Karena backtrader plot menggunakan matplotlib, kita ambil figure-nya
-    fig = cerebro.plot(style='candlestick', volume=False, iplot=False)[0][0]
-    plt.close()  # Tutup plot yang tidak perlu
+    fig = cerebro.plot(style='candlestick', volume=False, iplot=False)
+    if fig:
+        fig = fig[0][0]
+        plt.close()  # Tutup plot yang tidak perlu
     
     # Buat figure baru untuk Streamlit
     new_fig, ax = plt.subplots(figsize=(12, 6))
     
-    # Simpan plot ke dalam buffer
-    from io import BytesIO
-    buf = BytesIO()
-    fig.savefig(buf, format="png")
-    buf.seek(0)
+    # Jika berhasil dapatkan plot
+    if fig:
+        # Simpan plot ke dalam buffer
+        from io import BytesIO
+        buf = BytesIO()
+        fig.savefig(buf, format="png")
+        buf.seek(0)
+        
+        # Baca buffer dan tampilkan
+        img = plt.imread(buf)
+        ax.imshow(img)
+    else:
+        ax.text(0.5, 0.5, "Tidak dapat menampilkan grafik", 
+                ha='center', va='center', fontsize=12)
     
-    # Baca buffer dan tampilkan
-    img = plt.imread(buf)
-    ax.imshow(img)
     ax.axis('off')
-    plt.close(fig)
     return new_fig
