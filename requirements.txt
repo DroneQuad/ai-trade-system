@@ -1,4 +1,3 @@
-tensorflow==2.15.0
 streamlit==1.32.0
 numpy==1.26.4
 pandas==2.2.1
@@ -6,3 +5,4 @@ yfinance==0.2.38
 matplotlib==3.8.3
 scikit-learn==1.4.1
 backtrader==1.9.78.123
+keras==2.15.0  # Gunakan Keras standalone
