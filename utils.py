@@ -4,18 +4,26 @@ import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 import backtrader as bt
 import matplotlib.pyplot as plt
+import io
+import os
+import warnings
+warnings.filterwarnings('ignore')
 
-# Coba impor TensorFlow, jika gagal gunakan Keras standalone
+# Coba impor Keras (tanpa TensorFlow)
 try:
-    from tensorflow.keras.models import Sequential
-    from tensorflow.keras.layers import LSTM, Dense, Dropout
-    from tensorflow.keras.optimizers import Adam
-    print("Using TensorFlow Keras")
-except ImportError:
     from keras.models import Sequential
     from keras.layers import LSTM, Dense, Dropout
     from keras.optimizers import Adam
     print("Using Standalone Keras")
+except ImportError:
+    try:
+        # Coba impor dari TensorFlow jika Keras standalone tidak ada
+        from tensorflow.keras.models import Sequential
+        from tensorflow.keras.layers import LSTM, Dense, Dropout
+        from tensorflow.keras.optimizers import Adam
+        print("Using TensorFlow Keras")
+    except ImportError:
+        print("Error: Neither keras nor tensorflow is installed")
 
 # Fungsi untuk download data
 def load_data(ticker, start_date, end_date):
@@ -49,18 +57,18 @@ def preprocess_data(data, lookback=60):
 # Membangun model LSTM
 def build_lstm_model(input_shape):
     model = Sequential([
-        LSTM(128, return_sequences=True, input_shape=input_shape),
-        Dropout(0.3),
-        LSTM(64, return_sequences=False),
-        Dropout(0.3),
-        Dense(32, activation='relu'),
+        LSTM(64, return_sequences=True, input_shape=input_shape),
+        Dropout(0.2),
+        LSTM(32, return_sequences=False),
+        Dropout(0.2),
+        Dense(16, activation='relu'),
         Dense(1)
     ])
     model.compile(optimizer=Adam(learning_rate=0.001), loss='mse', metrics=['mae'])
     return model
 
 # Melatih model
-def train_model(model, X_train, y_train, X_test, y_test, epochs=50, batch_size=32):
+def train_model(model, X_train, y_train, X_test, y_test, epochs=30, batch_size=32):
     history = model.fit(X_train, y_train, 
                         validation_data=(X_test, y_test),
                         epochs=epochs, 
@@ -80,7 +88,8 @@ class AIStrategy(bt.Strategy):
         self.signal = self.datas[0].signal[0]
         
         if self.signal == 1 and not self.position:
-            size = self.broker.getvalue() * 0.02 / self.data.close[0]
+            size = min(self.broker.getvalue() * 0.02 / self.data.close[0], 
+                      self.broker.getvalue() / self.data.close[0])
             self.buy(size=size)
         elif self.signal == -1 and self.position:
             self.close()
@@ -120,6 +129,9 @@ def run_backtest(data, signals, initial_cash=10000):
         cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
         cerebro.addanalyzer(bt.analyzers.Returns, _name='returns')
         
+        # Konfigurasi broker
+        cerebro.broker.set_commission(commission=0.001)  # 0.1% komisi
+        
         results = cerebro.run()
         strat = results[0]
         
@@ -135,29 +147,16 @@ def run_backtest(data, signals, initial_cash=10000):
 
 # Plot equity curve
 def plot_equity_curve(cerebro):
-    # Karena backtrader plot menggunakan matplotlib, kita ambil figure-nya
-    fig = cerebro.plot(style='candlestick', volume=False, iplot=False)
-    if fig:
-        fig = fig[0][0]
-        plt.close()  # Tutup plot yang tidak perlu
+    # Ekstrak nilai ekuitas dari broker
+    equity = cerebro.broker.get_value()
     
-    # Buat figure baru untuk Streamlit
-    new_fig, ax = plt.subplots(figsize=(12, 6))
+    # Buat plot sederhana
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.plot(equity, label='Equity Curve')
+    ax.set_title('Equity Curve')
+    ax.set_xlabel('Hari')
+    ax.set_ylabel('Nilai Portofolio ($)')
+    ax.grid(True)
+    ax.legend()
     
-    # Jika berhasil dapatkan plot
-    if fig:
-        # Simpan plot ke dalam buffer
-        from io import BytesIO
-        buf = BytesIO()
-        fig.savefig(buf, format="png")
-        buf.seek(0)
-        
-        # Baca buffer dan tampilkan
-        img = plt.imread(buf)
-        ax.imshow(img)
-    else:
-        ax.text(0.5, 0.5, "Tidak dapat menampilkan grafik", 
-                ha='center', va='center', fontsize=12)
-    
-    ax.axis('off')
-    return new_fig
+    return fig
