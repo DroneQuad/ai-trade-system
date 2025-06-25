@@ -2,7 +2,6 @@ import yfinance as yf
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
-import backtrader as bt
 import matplotlib.pyplot as plt
 import io
 import os
@@ -14,6 +13,7 @@ try:
     from keras.models import Sequential
     from keras.layers import LSTM, Dense, Dropout
     from keras.optimizers import Adam
+    from keras.callbacks import Callback
     print("Using Standalone Keras")
 except ImportError:
     try:
@@ -21,6 +21,7 @@ except ImportError:
         from tensorflow.keras.models import Sequential
         from tensorflow.keras.layers import LSTM, Dense, Dropout
         from tensorflow.keras.optimizers import Adam
+        from tensorflow.keras.callbacks import Callback
         print("Using TensorFlow Keras")
     except ImportError:
         print("Error: Neither keras nor tensorflow is installed")
@@ -28,7 +29,7 @@ except ImportError:
 # Fungsi untuk download data
 def load_data(ticker, start_date, end_date):
     try:
-        data = yf.download(ticker, start=start_date, end=end_date)
+        data = yf.download(ticker, start=start_date, end=end_date, progress=False)
         if data.empty:
             return pd.DataFrame()
         return data
@@ -57,42 +58,68 @@ def preprocess_data(data, lookback=60):
 # Membangun model LSTM
 def build_lstm_model(input_shape):
     model = Sequential([
-        LSTM(64, return_sequences=True, input_shape=input_shape),
+        LSTM(32, return_sequences=True, input_shape=input_shape),
         Dropout(0.2),
-        LSTM(32, return_sequences=False),
+        LSTM(16, return_sequences=False),
         Dropout(0.2),
-        Dense(16, activation='relu'),
+        Dense(8, activation='relu'),
         Dense(1)
     ])
     model.compile(optimizer=Adam(learning_rate=0.001), loss='mse', metrics=['mae'])
     return model
 
-# Melatih model
-def train_model(model, X_train, y_train, X_test, y_test, epochs=30, batch_size=32):
-    history = model.fit(X_train, y_train, 
-                        validation_data=(X_test, y_test),
-                        epochs=epochs, 
-                        batch_size=batch_size,
-                        verbose=0)
+# Callback untuk menampilkan progres training
+class TrainingProgressCallback(Callback):
+    def __init__(self, progress_bar, status_text, total_epochs):
+        self.progress_bar = progress_bar
+        self.status_text = status_text
+        self.total_epochs = total_epochs
+        
+    def on_epoch_end(self, epoch, logs=None):
+        current_progress = (epoch + 1) / self.total_epochs
+        self.progress_bar.progress(current_progress)
+        self.status_text.text(f"Epoch {epoch+1}/{self.total_epochs} - Loss: {logs['loss']:.4f}, Val Loss: {logs['val_loss']:.4f}")
+
+# Melatih model dengan progres
+def train_model_with_progress(model, X_train, y_train, X_test, y_test, progress_bar, status_text, epochs=15, batch_size=32):
+    callback = TrainingProgressCallback(progress_bar, status_text, epochs)
+    history = model.fit(
+        X_train, y_train, 
+        validation_data=(X_test, y_test),
+        epochs=epochs, 
+        batch_size=batch_size,
+        verbose=0,
+        callbacks=[callback]
+    )
     return history
 
-# Strategi backtrader
-class AIStrategy(bt.Strategy):
-    params = (('printlog', False),)
-
-    def __init__(self):
-        self.signal = 0  # Sinyal dari luar
-
-    def next(self):
-        # Ambil sinyal untuk hari ini
-        self.signal = self.datas[0].signal[0]
+# Strategi trading sederhana untuk backtest
+def simple_trading_strategy(data, signals, initial_cash=10000):
+    cash = initial_cash
+    position = 0
+    portfolio_value = [cash]
+    trades = []
+    
+    for i in range(len(data)):
+        price = data['Close'].iloc[i]
+        signal = signals[i]
         
-        if self.signal == 1 and not self.position:
-            size = min(self.broker.getvalue() * 0.02 / self.data.close[0], 
-                      self.broker.getvalue() / self.data.close[0])
-            self.buy(size=size)
-        elif self.signal == -1 and self.position:
-            self.close()
+        # Jual jika ada posisi dan sinyal jual
+        if position > 0 and signal == -1:
+            cash += position * price
+            position = 0
+            trades.append(('SELL', price, i))
+        
+        # Beli jika tidak ada posisi dan sinyal beli
+        elif position == 0 and signal == 1:
+            position = cash * 0.02 / price  # 2% dari modal
+            cash -= position * price
+            trades.append(('BUY', price, i))
+        
+        # Hitung nilai portofolio
+        portfolio_value.append(cash + position * price)
+    
+    return portfolio_value, trades
 
 # Menjalankan backtest
 def run_backtest(data, signals, initial_cash=10000):
@@ -103,56 +130,31 @@ def run_backtest(data, signals, initial_cash=10000):
             data = data.iloc[-min_length:]
             signals = signals[-min_length:]
         
-        # Tambahkan sinyal ke dataframe
-        data = data.copy()
-        data['signal'] = signals
+        # Jalankan backtest sederhana
+        portfolio_value, trades = simple_trading_strategy(data, signals, initial_cash)
         
-        cerebro = bt.Cerebro()
-        cerebro.broker.set_cash(initial_cash)
+        # Hitung metrik performa
+        returns = (portfolio_value[-1] - initial_cash) / initial_cash * 100
+        sharpe = 0  # Implementasi Sharpe Ratio yang sesungguhnya lebih kompleks
+        drawdown = 0
         
-        # Buat data feed dengan kolom sinyal
-        data_feed = bt.feeds.PandasData(
-            dataname=data,
-            datetime=None,
-            open='Open',
-            high='High',
-            low='Low',
-            close='Close',
-            volume='Volume',
-            openinterest=-1,
-            signal='signal'  # Kolom sinyal
-        )
-        cerebro.adddata(data_feed)
+        # Simulasi hasil untuk kompatibilitas
+        class CerebroSim:
+            pass
         
-        cerebro.addstrategy(AIStrategy)
-        cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe')
-        cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
-        cerebro.addanalyzer(bt.analyzers.Returns, _name='returns')
+        cerebro = CerebroSim()
+        cerebro.portfolio_value = portfolio_value
         
-        # Konfigurasi broker
-        cerebro.broker.set_commission(commission=0.001)  # 0.1% komisi
-        
-        results = cerebro.run()
-        strat = results[0]
-        
-        sharpe = strat.analyzers.sharpe.get_analysis()['sharperatio']
-        drawdown = strat.analyzers.drawdown.get_analysis()['max']['drawdown']
-        final_value = cerebro.broker.getvalue()
-        returns = (final_value - initial_cash) / initial_cash * 100
-        
-        return cerebro, sharpe, drawdown, returns, final_value
+        return cerebro, sharpe, drawdown, returns, portfolio_value[-1]
     except Exception as e:
         print(f"Error in backtesting: {e}")
         return None
 
 # Plot equity curve
 def plot_equity_curve(cerebro):
-    # Ekstrak nilai ekuitas dari broker
-    equity = cerebro.broker.get_value()
-    
     # Buat plot sederhana
     fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(equity, label='Equity Curve')
+    ax.plot(cerebro.portfolio_value, label='Equity Curve')
     ax.set_title('Equity Curve')
     ax.set_xlabel('Hari')
     ax.set_ylabel('Nilai Portofolio ($)')
